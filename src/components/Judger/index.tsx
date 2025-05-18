@@ -1,6 +1,7 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 
 interface TestResult {
+  id: string
   endpoint: string
   url: string
   method: string
@@ -11,336 +12,347 @@ interface TestResult {
   responseBody?: any
   passed: boolean
   reason?: string
+  testStatus: 'pending' | 'running' | 'passed' | 'failed'
 }
 
+interface TestEndpointConfig {
+  name: string
+  method: 'GET' | 'POST'
+  path: string
+  expectedStatus: number
+  expectedContentType?: string
+  requestBody?: any
+  validateBody?: (responseBody: any, requestBody?: any) => boolean
+  isSequentialTest?: boolean
+}
+
+const initialTestEndpoints: TestEndpointConfig[] = [
+  {
+    name: 'GET /todos',
+    method: 'GET',
+    path: '/todos',
+    expectedStatus: 200,
+    expectedContentType: 'application/json',
+    validateBody: (body: any) => Array.isArray(body)
+  },
+  {
+    name: 'GET /todos/{id} (existent)',
+    method: 'GET',
+    path: '/todos/1',
+    expectedStatus: 200,
+    expectedContentType: 'application/json',
+    validateBody: (body: any) =>
+      body &&
+      typeof body.id === 'number' &&
+      typeof body.title === 'string' &&
+      typeof body.completed === 'boolean' &&
+      body.id === 1 // Ensure it's specifically todo 1
+  },
+  {
+    name: 'GET /todos/{id} (non-existent)',
+    method: 'GET',
+    path: '/todos/99999',
+    expectedStatus: 404
+  },
+  {
+    name: 'POST /todos',
+    method: 'POST',
+    path: '/todos',
+    expectedStatus: 201,
+    expectedContentType: 'application/json',
+    requestBody: { title: 'Test Todo', completed: false },
+    validateBody: (
+      body: any,
+      requestBody: any // Now uses requestBody
+    ) =>
+      body &&
+      typeof body.id === 'number' &&
+      body.title === requestBody.title &&
+      body.completed === requestBody.completed
+  },
+  {
+    name: 'POST /todos, then GET and Validate',
+    method: 'POST',
+    path: '/todos',
+    expectedStatus: 201,
+    expectedContentType: 'application/json',
+    requestBody: { title: 'Validate Me Todo', completed: true },
+    validateBody: (
+      body: any,
+      requestBody: any // For the POST part
+    ) =>
+      body &&
+      typeof body.id === 'number' &&
+      body.title === requestBody.title &&
+      body.completed === requestBody.completed,
+    isSequentialTest: true
+  }
+]
+
 const Judger: React.FC = () => {
-  const [baseUrl, setBaseUrl] = useState<string>('http://localhost:8080')
+  const [baseUrl, setBaseUrl] = useState<string>('http://localhost:8080') // Default to FastAPI port
   const [results, setResults] = useState<TestResult[]>([])
   const [score, setScore] = useState<number>(0)
   const [testing, setTesting] = useState<boolean>(false)
+  const [expandedTestId, setExpandedTestId] = useState<string | null>(null)
 
-  const testEndpoints = [
-    {
-      name: 'GET /todos',
-      method: 'GET',
-      path: '/todos',
-      expectedStatus: 200,
-      expectedContentType: 'application/json',
-      validateBody: (body: any) => Array.isArray(body)
-    },
-    {
-      name: 'GET /todos/{id} (existent)',
-      method: 'GET',
-      path: '/todos/1', // Assumes a todo with ID 1 exists from initial backend data
-      expectedStatus: 200,
-      expectedContentType: 'application/json',
-      validateBody: (body: any) =>
-        body &&
-        typeof body.id === 'number' &&
-        typeof body.title === 'string' &&
-        typeof body.completed === 'boolean'
-    },
-    {
-      name: 'GET /todos/{id} (non-existent)',
-      method: 'GET',
-      path: '/todos/99999',
-      expectedStatus: 404
-    },
-    {
-      name: 'POST /todos',
-      method: 'POST',
-      path: '/todos',
-      expectedStatus: 201,
-      expectedContentType: 'application/json',
-      requestBody: { title: 'Test Todo', completed: false },
-      validateBody: (body: any) =>
-        body &&
-        typeof body.id === 'number' &&
-        typeof body.title === 'string' &&
-        typeof body.completed === 'boolean'
-    },
-    {
-      name: 'POST /todos, then GET and Validate',
-      method: 'POST', // Initial method
-      path: '/todos',
-      expectedStatus: 201, // Expected for the initial POST
-      expectedContentType: 'application/json', // Expected for the initial POST
-      requestBody: { title: 'Validate Me Todo', completed: false },
-      // validateBody for POST response: checks if ID is returned and matches sent data
-      validateBody: (body: any, requestBody: any) =>
-        body &&
-        typeof body.id === 'number' &&
-        body.title === requestBody.title &&
-        body.completed === requestBody.completed,
-      isSequentialTest: true // Flag for special handling
-    }
-  ]
+  const initializeResults = () => {
+    return initialTestEndpoints.map(
+      (endpoint) =>
+        ({
+          id: endpoint.name,
+          endpoint: endpoint.name,
+          url: '',
+          method: endpoint.method,
+          expectedStatus: endpoint.expectedStatus,
+          expectedContentType: endpoint.expectedContentType,
+          actualStatus: undefined,
+          actualContentType: undefined,
+          responseBody: undefined,
+          passed: false,
+          reason: '',
+          testStatus: 'pending'
+        }) as TestResult
+    )
+  }
+
+  useEffect(() => {
+    setResults(initializeResults())
+  }, [])
 
   const handleTest = async () => {
     setTesting(true)
-    setResults([])
+    setExpandedTestId(null) // Collapse all cards
     let currentScore = 0
+    const newResults = initializeResults() // Reset results to pending
+    setResults(newResults)
 
-    for (const endpoint of testEndpoints) {
-      const url = `${baseUrl}${endpoint.path}`
-      const result: TestResult = {
-        endpoint: endpoint.name,
-        url,
-        method: endpoint.method,
-        expectedStatus: endpoint.expectedStatus,
-        passed: false,
-        reason: ''
+    for (let i = 0; i < initialTestEndpoints.length; i++) {
+      const endpoint = initialTestEndpoints[i]
+      const currentResultIndex = newResults.findIndex(
+        (r) => r.id === endpoint.name
+      )
+
+      // Update status to running
+      newResults[currentResultIndex] = {
+        ...newResults[currentResultIndex],
+        testStatus: 'running',
+        url: `${baseUrl}${endpoint.path}` // Set URL when test starts
       }
+      setResults([...newResults])
 
-      if (endpoint.isSequentialTest) {
-        result.method = 'POST then GET' // Update method display for this test
-        let postResponseBody: any
-        let postId: number | undefined
-        const postRequestData = endpoint.requestBody
+      let passed = false
+      let reason = ''
+      let actualStatus: number | undefined
+      let actualContentType: string | undefined
+      let responseBody: any
+      let finalUrl = `${baseUrl}${endpoint.path}`
 
-        // Step 1: Perform POST request
-        try {
+      try {
+        if (endpoint.isSequentialTest && endpoint.requestBody) {
+          // --- Sequential Test Logic (POST then GET) ---
+          newResults[currentResultIndex].method = 'POST then GET'
+          const postRequestData = endpoint.requestBody
+          let postId: number | undefined
+
+          // Step 1: POST
           const postOptions: RequestInit = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(postRequestData)
           }
-          const postResponse = await fetch(url, postOptions)
-          result.actualStatus = postResponse.status
-          result.actualContentType =
+          const postResponse = await fetch(
+            `${baseUrl}${endpoint.path}`,
+            postOptions
+          )
+          actualStatus = postResponse.status // Status for the POST part
+          actualContentType =
             postResponse.headers.get('Content-Type') || undefined
 
-          const postResponseContentType =
-            postResponse.headers.get('Content-Type')
+          let postResponseBody: any
           if (
-            postResponseContentType &&
-            postResponseContentType.includes('application/json')
+            actualContentType &&
+            actualContentType.includes('application/json')
           ) {
             postResponseBody = await postResponse.json()
-            result.responseBody = { post: postResponseBody } // Store POST response
           } else {
             postResponseBody = await postResponse.text()
-            result.responseBody = { post: postResponseBody }
-            result.passed = false
-            result.reason = 'POST response is not JSON.'
-            setResults((prevResults) => [...prevResults, result])
-            continue
+            throw new Error('POST response is not JSON.')
           }
+          responseBody = { post: postResponseBody }
 
-          // Validate POST status
-          if (postResponse.status !== endpoint.expectedStatus) {
-            result.passed = false
-            result.reason = `POST failed: Status mismatch. Expected ${endpoint.expectedStatus}, got ${postResponse.status}.`
-            setResults((prevResults) => [...prevResults, result])
-            continue
+          if (actualStatus !== endpoint.expectedStatus) {
+            throw new Error(
+              `POST Status mismatch. Expected ${endpoint.expectedStatus}, got ${actualStatus}.`
+            )
           }
-
-          // Validate POST content type
           if (
             endpoint.expectedContentType &&
-            (!result.actualContentType ||
-              !result.actualContentType.includes(endpoint.expectedContentType))
+            (!actualContentType ||
+              !actualContentType.includes(endpoint.expectedContentType))
           ) {
-            result.passed = false
-            result.reason = `POST failed: Content-Type mismatch. Expected ${endpoint.expectedContentType}, got ${result.actualContentType}.`
-            setResults((prevResults) => [...prevResults, result])
-            continue
+            throw new Error(
+              `POST Content-Type mismatch. Expected ${endpoint.expectedContentType}, got ${actualContentType}.`
+            )
           }
-
-          // Validate POST response body using endpoint.validateBody
           if (
             endpoint.validateBody &&
             !endpoint.validateBody(postResponseBody, postRequestData)
           ) {
-            result.passed = false
-            result.reason =
-              'POST failed: Response body validation failed against request data or ID missing.'
-            setResults((prevResults) => [...prevResults, result])
-            continue
+            throw new Error('POST response body validation failed.')
           }
-
           postId = postResponseBody.id
           if (typeof postId !== 'number') {
-            result.passed = false
-            result.reason =
-              'POST failed: ID not found or not a number in response body.'
-            setResults((prevResults) => [...prevResults, result])
-            continue
+            throw new Error('POST response did not include a numeric ID.')
           }
 
-          // Step 2: Perform GET request using the ID from POST response
+          // Step 2: GET
           const getUrl = `${baseUrl}/todos/${postId}`
-          result.url = `${url} (POST), then ${getUrl} (GET)` // Update URL display
+          finalUrl = `${baseUrl}${endpoint.path} (POST) -> ${getUrl} (GET)`
+          newResults[currentResultIndex].url = finalUrl // Update URL for display
 
           const getResponse = await fetch(getUrl, { method: 'GET' })
-          const getActualStatus = getResponse.status
-          const getActualContentType =
+          actualStatus = getResponse.status // Status for the GET part
+          actualContentType =
             getResponse.headers.get('Content-Type') || undefined
-          let getResponseBody: any
 
-          const getResponseContentType = getResponse.headers.get('Content-Type')
+          let getResponseBody: any
           if (
-            getResponseContentType &&
-            getResponseContentType.includes('application/json')
+            actualContentType &&
+            actualContentType.includes('application/json')
           ) {
             getResponseBody = await getResponse.json()
-            result.responseBody = {
-              post: postResponseBody,
-              get: getResponseBody
-            } // Store both responses
           } else {
             getResponseBody = await getResponse.text()
-            result.responseBody = {
-              post: postResponseBody,
-              get: getResponseBody
-            }
-            result.passed = false
-            result.reason = `GET /todos/${postId} failed: Response is not JSON.`
-            setResults((prevResults) => [...prevResults, result])
-            continue
+            throw new Error(`GET /todos/${postId} response is not JSON.`)
           }
+          responseBody.get = getResponseBody
 
-          // Validate GET status (expected 200)
-          if (getActualStatus !== 200) {
-            result.passed = false
-            result.reason = `GET /todos/${postId} failed: Status mismatch. Expected 200, got ${getActualStatus}.`
-            setResults((prevResults) => [...prevResults, result])
-            continue
+          if (actualStatus !== 200) {
+            // GET always expects 200
+            throw new Error(
+              `GET /todos/${postId} Status mismatch. Expected 200, got ${actualStatus}.`
+            )
           }
-
-          // Validate GET content type (expected application/json)
           if (
-            !getActualContentType ||
-            !getActualContentType.includes('application/json')
+            !actualContentType ||
+            !actualContentType.includes('application/json')
           ) {
-            result.passed = false
-            result.reason = `GET /todos/${postId} failed: Content-Type mismatch. Expected application/json, got ${getActualContentType}.`
-            setResults((prevResults) => [...prevResults, result])
-            continue
+            // GET always expects JSON
+            throw new Error(
+              `GET /todos/${postId} Content-Type mismatch. Expected application/json, got ${actualContentType}.`
+            )
           }
-
-          // Validate GET response body against original POST request data
           if (
-            getResponseBody.id === postId &&
-            getResponseBody.title === postRequestData.title &&
-            getResponseBody.completed === postRequestData.completed
+            !(
+              getResponseBody.id === postId &&
+              getResponseBody.title === postRequestData.title &&
+              getResponseBody.completed === postRequestData.completed
+            )
           ) {
-            result.passed = true
-            currentScore++
-          } else {
-            result.passed = false
-            result.reason = `GET /todos/${postId} failed: Response body does not match original POST data. Expected title: "${postRequestData.title}", got "${getResponseBody.title}". Expected completed: ${postRequestData.completed}, got ${getResponseBody.completed}.`
+            throw new Error(
+              `GET /todos/${postId} response body did not match original POST data.`
+            )
           }
-        } catch (error: any) {
-          result.passed = false
-          if (
-            error instanceof TypeError &&
-            error.message === 'Failed to fetch'
-          ) {
-            result.reason =
-              'Network error or CORS issue during sequential test. Check console.'
-          } else {
-            result.reason = `Sequential test request failed: ${error.message}`
-          }
-        }
-      } else {
-        // Existing logic for single-request tests
-        try {
-          const options: RequestInit = {
-            method: endpoint.method,
-            headers: {}
-          }
-
+          passed = true // If all checks pass for sequential test
+        } else {
+          // --- Single Request Test Logic ---
+          const options: RequestInit = { method: endpoint.method, headers: {} }
           if (endpoint.method === 'POST' && endpoint.requestBody) {
             ;(options.headers as Record<string, string>)['Content-Type'] =
               'application/json'
             options.body = JSON.stringify(endpoint.requestBody)
           }
 
-          const response = await fetch(url, options)
-          result.actualStatus = response.status
-          result.actualContentType =
-            response.headers.get('Content-Type') || undefined
+          const response = await fetch(`${baseUrl}${endpoint.path}`, options)
+          actualStatus = response.status
+          actualContentType = response.headers.get('Content-Type') || undefined
 
-          let responseBody
-          const contentType = response.headers.get('Content-Type')
-          if (contentType && contentType.includes('application/json')) {
+          if (
+            actualContentType &&
+            actualContentType.includes('application/json')
+          ) {
             responseBody = await response.json()
-            result.responseBody = responseBody
           } else {
-            responseBody = await response.text() // Get text for non-JSON for logging
-            result.responseBody = responseBody
+            responseBody = await response.text() // Store text if not JSON
           }
 
-          let passed = result.actualStatus === result.expectedStatus
+          passed = actualStatus === endpoint.expectedStatus
+          if (!passed) {
+            reason = `Status code mismatch. Expected: ${endpoint.expectedStatus}, Actual: ${actualStatus}`
+          }
+
           if (passed && endpoint.expectedContentType) {
             if (
-              !result.actualContentType ||
-              !result.actualContentType.includes(endpoint.expectedContentType)
+              !actualContentType ||
+              !actualContentType.includes(endpoint.expectedContentType)
             ) {
               passed = false
-              result.reason = `Content-Type mismatch. Expected: ${endpoint.expectedContentType}, Actual: ${result.actualContentType}`
+              reason = `Content-Type mismatch. Expected: ${
+                endpoint.expectedContentType
+              }, Actual: ${actualContentType || 'N/A'}`
             }
           }
-          // For non-sequential tests, validateBody takes only responseBody
           if (passed && endpoint.validateBody) {
-            // Pass endpoint.requestBody only if validateBody expects it (e.g. for POST validation)
-            const isValid =
-              endpoint.method === 'POST' &&
-              endpoint.name !== 'POST /todos, then GET and Validate'
-                ? endpoint.validateBody(responseBody, endpoint.requestBody)
-                : endpoint.validateBody(responseBody)
-            if (!isValid) {
+            if (!endpoint.validateBody(responseBody, endpoint.requestBody)) {
               passed = false
-              result.reason = 'Response body validation failed.'
+              reason = reason || 'Response body validation failed.'
             }
-          }
-
-          // Specific validation for GET /todos/1 to check ID, if not already covered by a more generic validateBody
-          if (
-            passed &&
-            endpoint.name === 'GET /todos/{id} (existent)' &&
-            responseBody &&
-            typeof responseBody.id === 'number' && // ensure id exists before checking
-            responseBody.id !== 1 // Assuming path is /todos/1
-          ) {
-            // This check might be redundant if validateBody is comprehensive
-            // For example, if path was dynamic like /todos/${someId}, this check would be: responseBody.id !== someId
-            // Given path is hardcoded to /todos/1, we check against 1.
-            if (endpoint.path === '/todos/1' && responseBody.id !== 1) {
-              passed = false
-              result.reason = `Expected id to be 1 for ${endpoint.path}, but got ${responseBody.id}`
-            }
-          }
-
-          result.passed = passed
-          if (passed) {
-            currentScore++
-          } else if (!result.reason) {
-            if (result.actualStatus !== result.expectedStatus) {
-              result.reason = `Status code mismatch. Expected: ${result.expectedStatus}, Actual: ${result.actualStatus}`
-            } else {
-              result.reason =
-                'Test failed for an unknown reason after passing status and content type checks.'
-            }
-          }
-        } catch (error: any) {
-          result.passed = false
-          if (
-            error instanceof TypeError &&
-            error.message === 'Failed to fetch'
-          ) {
-            result.reason =
-              'Network error or CORS issue. Check browser console and ensure backend allows requests from this origin.'
-          } else {
-            result.reason = `Request failed: ${error.message}`
           }
         }
+        if (passed) currentScore++
+      } catch (error: any) {
+        passed = false
+        reason = error.message || 'An unknown error occurred.'
+        if (error instanceof TypeError && error.message === 'Failed to fetch') {
+          reason =
+            'Network error or CORS issue. Check backend is running and allows requests from this origin (localhost:5173). Check browser console for more details.'
+        }
       }
-      setResults((prevResults) => [...prevResults, result])
+
+      newResults[currentResultIndex] = {
+        ...newResults[currentResultIndex],
+        actualStatus,
+        actualContentType,
+        responseBody,
+        passed,
+        reason: passed ? '' : reason,
+        testStatus: passed ? 'passed' : 'failed',
+        url: finalUrl
+      }
+      setResults([...newResults])
+
+      if (!passed) {
+        break // Stop further tests if one fails
+      }
     }
+
     setScore(currentScore)
     setTesting(false)
+  }
+
+  const toggleExpand = (id: string) => {
+    setExpandedTestId(expandedTestId === id ? null : id)
+  }
+
+  const getCardStatusClass = (
+    status: TestResult['testStatus'],
+    passed: boolean
+  ) => {
+    if (status === 'failed' || (status === 'passed' && !passed))
+      return 'border-red-500 bg-red-50'
+    if (status === 'passed' && passed) return 'border-green-500 bg-green-50'
+    if (status === 'running') return 'border-blue-300 bg-blue-50' // For running
+    return 'border-gray-300 bg-gray-50' // Pending
+  }
+
+  const getStatusIcon = (status: TestResult['testStatus'], passed: boolean) => {
+    if (status === 'failed' || (status === 'passed' && !passed))
+      return <span className="text-red-500">✖</span>
+    if (status === 'passed' && passed)
+      return <span className="text-green-500">✔</span>
+    if (status === 'running') return <span className="text-blue-500">⏳</span>
+    return <span className="text-gray-500">⚪</span> // Pending
   }
 
   return (
@@ -359,64 +371,103 @@ const Judger: React.FC = () => {
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
           className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
+          placeholder="e.g., http://localhost:8000"
         />
       </div>
       <button
         onClick={handleTest}
         disabled={testing}
-        className="rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+        className="mb-6 rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700 disabled:opacity-50"
       >
-        {testing ? 'Testing...' : 'Start Test'}
+        {testing ? 'Testing...' : 'Start All Tests'}
       </button>
 
-      <div className="mt-6">
+      <div className="mt-1">
         <h2 className="text-xl font-semibold">
-          Test Results (Score: {score}/{testEndpoints.length})
+          Test Progress (Score: {score}/{initialTestEndpoints.length})
         </h2>
         {results.length === 0 && !testing && (
-          <p>Click "Start Test" to run the API tests.</p>
+          <p className="text-gray-600">
+            Click "Start All Tests" to run the API checks.
+          </p>
         )}
-        {results.map((result, index) => (
+      </div>
+
+      <div className="space-y-3">
+        {results.map((resultItem) => (
           <div
-            key={index}
-            className={`mt-4 rounded border p-4 ${
-              result.passed
-                ? 'border-green-500 bg-green-50'
-                : 'border-red-500 bg-red-50'
-            }`}
+            key={resultItem.id}
+            className={`rounded border p-3 shadow-sm transition-all duration-200 ${getCardStatusClass(
+              resultItem.testStatus,
+              resultItem.passed
+            )}`}
           >
-            <h3 className="font-semibold">{result.endpoint}</h3>
-            <p>URL: {result.url}</p>
-            <p>Method: {result.method}</p>
-            <p>Expected Status: {result.expectedStatus}</p>
-            <p>Actual Status: {result.actualStatus ?? 'N/A'}</p>
-            {result.expectedContentType && (
-              <p>Expected Content-Type: {result.expectedContentType}</p>
-            )}
-            {result.actualContentType && (
-              <p>Actual Content-Type: {result.actualContentType}</p>
-            )}
-            <p>
-              Passed:{' '}
-              <span
-                className={
-                  result.passed
-                    ? 'font-bold text-green-700'
-                    : 'font-bold text-red-700'
-                }
-              >
-                {result.passed ? 'Yes' : 'No'}
-              </span>
-            </p>
-            {!result.passed && result.reason && <p>Reason: {result.reason}</p>}
-            {result.responseBody && (
-              <div>
-                <p>Response Body:</p>
-                <pre className="overflow-x-auto rounded bg-gray-100 p-2 text-sm">
-                  {typeof result.responseBody === 'object'
-                    ? JSON.stringify(result.responseBody, null, 2)
-                    : result.responseBody}
-                </pre>
+            <div
+              className="flex cursor-pointer items-center justify-between"
+              onClick={() => toggleExpand(resultItem.id)}
+            >
+              <h3 className="font-semibold">{resultItem.endpoint}</h3>
+              <div className="flex items-center">
+                {getStatusIcon(resultItem.testStatus, resultItem.passed)}
+                <span className="ml-2 text-sm font-medium">
+                  {resultItem.testStatus.charAt(0).toUpperCase() +
+                    resultItem.testStatus.slice(1)}
+                  {resultItem.testStatus === 'passed' &&
+                    !resultItem.passed &&
+                    ' (Validation Failed)'}
+                </span>
+                <span className="ml-2 text-xl">
+                  {expandedTestId === resultItem.id ? '▲' : '▼'}
+                </span>
+              </div>
+            </div>
+            {expandedTestId === resultItem.id && (
+              <div className="mt-3 border-t pt-3 text-sm">
+                <p>
+                  <strong>URL:</strong> {resultItem.url || 'N/A'}
+                </p>
+                <p>
+                  <strong>Method:</strong> {resultItem.method}
+                </p>
+                <p>
+                  <strong>Expected Status:</strong> {resultItem.expectedStatus}
+                </p>
+                {resultItem.actualStatus !== undefined && (
+                  <p>
+                    <strong>Actual Status:</strong> {resultItem.actualStatus}
+                  </p>
+                )}
+                {resultItem.expectedContentType && (
+                  <p>
+                    <strong>Expected Content-Type:</strong>{' '}
+                    {resultItem.expectedContentType}
+                  </p>
+                )}
+                {resultItem.actualContentType && (
+                  <p>
+                    <strong>Actual Content-Type:</strong>{' '}
+                    {resultItem.actualContentType}
+                  </p>
+                )}
+
+                {!resultItem.passed && resultItem.reason && (
+                  <p className="mt-1 text-red-700">
+                    <strong>Failure Reason:</strong> {resultItem.reason}
+                  </p>
+                )}
+
+                {resultItem.responseBody && (
+                  <div className="mt-2">
+                    <p>
+                      <strong>Response Body:</strong>
+                    </p>
+                    <pre className="mt-1 max-h-60 overflow-auto rounded bg-gray-100 p-2 text-xs">
+                      {typeof resultItem.responseBody === 'object'
+                        ? JSON.stringify(resultItem.responseBody, null, 2)
+                        : String(resultItem.responseBody)}
+                    </pre>
+                  </div>
+                )}
               </div>
             )}
           </div>

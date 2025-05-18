@@ -1,8 +1,15 @@
-import { createRoot } from 'react-dom/client'
-import 'tailwindcss/tailwind.css'
-import App from 'components/App'
+import React from 'react'
+import ReactDOM from 'react-dom/client'
+import Judger from './components/Judger'
 
-const container = document.getElementById('root') as HTMLDivElement
-const root = createRoot(container)
-
-root.render(<App />)
+const rootElement = document.getElementById('root')
+if (rootElement) {
+  const root = ReactDOM.createRoot(rootElement)
+  root.render(
+    <React.StrictMode>
+      <Judger />
+    </React.StrictMode>
+  )
+} else {
+  console.error('Failed to find the root element')
+}

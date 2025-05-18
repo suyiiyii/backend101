@@ -397,7 +397,7 @@ const Judger: React.FC = () => {
         {results.map((resultItem) => (
           <div
             key={resultItem.id}
-            className={`rounded border p-3 shadow-sm transition-all duration-200 ${getCardStatusClass(
+            className={`rounded-lg border-2 p-4 shadow-md transition-all duration-300 hover:shadow-lg ${getCardStatusClass(
               resultItem.testStatus,
               resultItem.passed
             )}`}
@@ -406,62 +406,117 @@ const Judger: React.FC = () => {
               className="flex cursor-pointer items-center justify-between"
               onClick={() => toggleExpand(resultItem.id)}
             >
-              <h3 className="font-semibold">{resultItem.endpoint}</h3>
               <div className="flex items-center">
-                {getStatusIcon(resultItem.testStatus, resultItem.passed)}
-                <span className="ml-2 text-sm font-medium">
+                <div className="mr-3 text-xl">
+                  {getStatusIcon(resultItem.testStatus, resultItem.passed)}
+                </div>
+                <h3 className="font-semibold">{resultItem.endpoint}</h3>
+              </div>
+              <div className="flex items-center">
+                <span
+                  className="mr-2 rounded-full px-2 py-0.5 text-xs font-medium text-white"
+                  style={{
+                    backgroundColor:
+                      resultItem.testStatus === 'failed' ||
+                      (resultItem.testStatus === 'passed' && !resultItem.passed)
+                        ? '#f87171' // red-400
+                        : resultItem.testStatus === 'passed' &&
+                            resultItem.passed
+                          ? '#4ade80' // green-400
+                          : resultItem.testStatus === 'running'
+                            ? '#60a5fa' // blue-400
+                            : '#9ca3af' // gray-400
+                  }}
+                >
                   {resultItem.testStatus.charAt(0).toUpperCase() +
                     resultItem.testStatus.slice(1)}
                   {resultItem.testStatus === 'passed' &&
                     !resultItem.passed &&
                     ' (Validation Failed)'}
                 </span>
-                <span className="ml-2 text-xl">
-                  {expandedTestId === resultItem.id ? '▲' : '▼'}
+                <span
+                  className="ml-2 text-gray-500 transition-transform duration-200"
+                  style={{
+                    transform:
+                      expandedTestId === resultItem.id
+                        ? 'rotate(180deg)'
+                        : 'rotate(0deg)'
+                  }}
+                >
+                  ▼
                 </span>
               </div>
             </div>
             {expandedTestId === resultItem.id && (
-              <div className="mt-3 border-t pt-3 text-sm">
-                <p>
-                  <strong>URL:</strong> {resultItem.url || 'N/A'}
-                </p>
-                <p>
-                  <strong>Method:</strong> {resultItem.method}
-                </p>
-                <p>
-                  <strong>Expected Status:</strong> {resultItem.expectedStatus}
-                </p>
-                {resultItem.actualStatus !== undefined && (
-                  <p>
-                    <strong>Actual Status:</strong> {resultItem.actualStatus}
+              <div className="mt-4 border-t pt-4 text-sm">
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <p className="flex items-baseline">
+                    <span className="mr-2 font-semibold">URL:</span>{' '}
+                    {resultItem.url || 'N/A'}
                   </p>
-                )}
-                {resultItem.expectedContentType && (
-                  <p>
-                    <strong>Expected Content-Type:</strong>{' '}
-                    {resultItem.expectedContentType}
+                  <p className="flex items-baseline">
+                    <span className="mr-2 font-semibold">Method:</span>{' '}
+                    {resultItem.method}
                   </p>
-                )}
-                {resultItem.actualContentType && (
-                  <p>
-                    <strong>Actual Content-Type:</strong>{' '}
-                    {resultItem.actualContentType}
+                  <p className="flex items-baseline">
+                    <span className="mr-2 font-semibold">Expected Status:</span>{' '}
+                    {resultItem.expectedStatus}
                   </p>
-                )}
+                  {resultItem.actualStatus !== undefined && (
+                    <p className="flex items-baseline">
+                      <span className="mr-2 font-semibold">Actual Status:</span>
+                      <span
+                        className={
+                          resultItem.actualStatus === resultItem.expectedStatus
+                            ? 'text-green-600'
+                            : 'text-red-600'
+                        }
+                      >
+                        {resultItem.actualStatus}
+                      </span>
+                    </p>
+                  )}
+                  {resultItem.expectedContentType && (
+                    <p className="flex items-baseline">
+                      <span className="mr-2 font-semibold">
+                        Expected Content-Type:
+                      </span>{' '}
+                      {resultItem.expectedContentType}
+                    </p>
+                  )}
+                  {resultItem.actualContentType && (
+                    <p className="flex items-baseline">
+                      <span className="mr-2 font-semibold">
+                        Actual Content-Type:
+                      </span>{' '}
+                      <span
+                        className={
+                          resultItem.actualContentType &&
+                          resultItem.expectedContentType &&
+                          resultItem.actualContentType.includes(
+                            resultItem.expectedContentType
+                          )
+                            ? 'text-green-600'
+                            : 'text-red-600'
+                        }
+                      >
+                        {resultItem.actualContentType}
+                      </span>
+                    </p>
+                  )}
+                </div>
 
                 {!resultItem.passed && resultItem.reason && (
-                  <p className="mt-1 text-red-700">
-                    <strong>Failure Reason:</strong> {resultItem.reason}
-                  </p>
+                  <div className="mt-3 rounded-md bg-red-50 p-3 text-red-700">
+                    <span className="font-semibold">Failure Reason:</span>{' '}
+                    {resultItem.reason}
+                  </div>
                 )}
 
                 {resultItem.responseBody && (
-                  <div className="mt-2">
-                    <p>
-                      <strong>Response Body:</strong>
-                    </p>
-                    <pre className="mt-1 max-h-60 overflow-auto rounded bg-gray-100 p-2 text-xs">
+                  <div className="mt-3">
+                    <p className="font-semibold">Response Body:</p>
+                    <pre className="mt-1 max-h-64 overflow-auto rounded-md bg-gray-100 p-3 text-xs">
                       {typeof resultItem.responseBody === 'object'
                         ? JSON.stringify(resultItem.responseBody, null, 2)
                         : String(resultItem.responseBody)}

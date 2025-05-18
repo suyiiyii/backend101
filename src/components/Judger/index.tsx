@@ -31,7 +31,7 @@ const Judger: React.FC = () => {
     {
       name: 'GET /todos/{id} (existent)',
       method: 'GET',
-      path: '/todos/1',
+      path: '/todos/1', // Assumes a todo with ID 1 exists from initial backend data
       expectedStatus: 200,
       expectedContentType: 'application/json',
       validateBody: (body: any) =>
@@ -58,6 +58,21 @@ const Judger: React.FC = () => {
         typeof body.id === 'number' &&
         typeof body.title === 'string' &&
         typeof body.completed === 'boolean'
+    },
+    {
+      name: 'POST /todos, then GET and Validate',
+      method: 'POST', // Initial method
+      path: '/todos',
+      expectedStatus: 201, // Expected for the initial POST
+      expectedContentType: 'application/json', // Expected for the initial POST
+      requestBody: { title: 'Validate Me Todo', completed: false },
+      // validateBody for POST response: checks if ID is returned and matches sent data
+      validateBody: (body: any, requestBody: any) =>
+        body &&
+        typeof body.id === 'number' &&
+        body.title === requestBody.title &&
+        body.completed === requestBody.completed,
+      isSequentialTest: true // Flag for special handling
     }
   ]
 
@@ -73,75 +88,253 @@ const Judger: React.FC = () => {
         url,
         method: endpoint.method,
         expectedStatus: endpoint.expectedStatus,
-        passed: false
+        passed: false,
+        reason: ''
       }
 
-      try {
-        const options: RequestInit = {
-          method: endpoint.method,
-          headers: {}
-        }
+      if (endpoint.isSequentialTest) {
+        result.method = 'POST then GET' // Update method display for this test
+        let postResponseBody: any
+        let postId: number | undefined
+        const postRequestData = endpoint.requestBody
 
-        if (endpoint.method === 'POST' && endpoint.requestBody) {
-          ;(options.headers as Record<string, string>)['Content-Type'] =
-            'application/json'
-          options.body = JSON.stringify(endpoint.requestBody)
-        }
+        // Step 1: Perform POST request
+        try {
+          const postOptions: RequestInit = {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(postRequestData)
+          }
+          const postResponse = await fetch(url, postOptions)
+          result.actualStatus = postResponse.status
+          result.actualContentType =
+            postResponse.headers.get('Content-Type') || undefined
 
-        const response = await fetch(url, options)
-        result.actualStatus = response.status
-        result.actualContentType =
-          response.headers.get('Content-Type') || undefined
-
-        let responseBody
-        const contentType = response.headers.get('Content-Type')
-        if (contentType && contentType.includes('application/json')) {
-          responseBody = await response.json()
-          result.responseBody = responseBody
-        } else {
-          result.responseBody = 'Response is not JSON'
-        }
-
-        let passed = result.actualStatus === result.expectedStatus
-        if (passed && endpoint.expectedContentType) {
+          const postResponseContentType =
+            postResponse.headers.get('Content-Type')
           if (
-            !result.actualContentType ||
-            !result.actualContentType.includes(endpoint.expectedContentType)
+            postResponseContentType &&
+            postResponseContentType.includes('application/json')
           ) {
-            passed = false
-            result.reason = `Content-Type mismatch. Expected: ${endpoint.expectedContentType}, Actual: ${result.actualContentType}`
+            postResponseBody = await postResponse.json()
+            result.responseBody = { post: postResponseBody } // Store POST response
+          } else {
+            postResponseBody = await postResponse.text()
+            result.responseBody = { post: postResponseBody }
+            result.passed = false
+            result.reason = 'POST response is not JSON.'
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Validate POST status
+          if (postResponse.status !== endpoint.expectedStatus) {
+            result.passed = false
+            result.reason = `POST failed: Status mismatch. Expected ${endpoint.expectedStatus}, got ${postResponse.status}.`
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Validate POST content type
+          if (
+            endpoint.expectedContentType &&
+            (!result.actualContentType ||
+              !result.actualContentType.includes(endpoint.expectedContentType))
+          ) {
+            result.passed = false
+            result.reason = `POST failed: Content-Type mismatch. Expected ${endpoint.expectedContentType}, got ${result.actualContentType}.`
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Validate POST response body using endpoint.validateBody
+          if (
+            endpoint.validateBody &&
+            !endpoint.validateBody(postResponseBody, postRequestData)
+          ) {
+            result.passed = false
+            result.reason =
+              'POST failed: Response body validation failed against request data or ID missing.'
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          postId = postResponseBody.id
+          if (typeof postId !== 'number') {
+            result.passed = false
+            result.reason =
+              'POST failed: ID not found or not a number in response body.'
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Step 2: Perform GET request using the ID from POST response
+          const getUrl = `${baseUrl}/todos/${postId}`
+          result.url = `${url} (POST), then ${getUrl} (GET)` // Update URL display
+
+          const getResponse = await fetch(getUrl, { method: 'GET' })
+          const getActualStatus = getResponse.status
+          const getActualContentType =
+            getResponse.headers.get('Content-Type') || undefined
+          let getResponseBody: any
+
+          const getResponseContentType = getResponse.headers.get('Content-Type')
+          if (
+            getResponseContentType &&
+            getResponseContentType.includes('application/json')
+          ) {
+            getResponseBody = await getResponse.json()
+            result.responseBody = {
+              post: postResponseBody,
+              get: getResponseBody
+            } // Store both responses
+          } else {
+            getResponseBody = await getResponse.text()
+            result.responseBody = {
+              post: postResponseBody,
+              get: getResponseBody
+            }
+            result.passed = false
+            result.reason = `GET /todos/${postId} failed: Response is not JSON.`
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Validate GET status (expected 200)
+          if (getActualStatus !== 200) {
+            result.passed = false
+            result.reason = `GET /todos/${postId} failed: Status mismatch. Expected 200, got ${getActualStatus}.`
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Validate GET content type (expected application/json)
+          if (
+            !getActualContentType ||
+            !getActualContentType.includes('application/json')
+          ) {
+            result.passed = false
+            result.reason = `GET /todos/${postId} failed: Content-Type mismatch. Expected application/json, got ${getActualContentType}.`
+            setResults((prevResults) => [...prevResults, result])
+            continue
+          }
+
+          // Validate GET response body against original POST request data
+          if (
+            getResponseBody.id === postId &&
+            getResponseBody.title === postRequestData.title &&
+            getResponseBody.completed === postRequestData.completed
+          ) {
+            result.passed = true
+            currentScore++
+          } else {
+            result.passed = false
+            result.reason = `GET /todos/${postId} failed: Response body does not match original POST data. Expected title: "${postRequestData.title}", got "${getResponseBody.title}". Expected completed: ${postRequestData.completed}, got ${getResponseBody.completed}.`
+          }
+        } catch (error: any) {
+          result.passed = false
+          if (
+            error instanceof TypeError &&
+            error.message === 'Failed to fetch'
+          ) {
+            result.reason =
+              'Network error or CORS issue during sequential test. Check console.'
+          } else {
+            result.reason = `Sequential test request failed: ${error.message}`
           }
         }
-        if (passed && endpoint.validateBody) {
-          if (!endpoint.validateBody(responseBody)) {
-            passed = false
-            result.reason = 'Response body validation failed.'
+      } else {
+        // Existing logic for single-request tests
+        try {
+          const options: RequestInit = {
+            method: endpoint.method,
+            headers: {}
           }
-        }
 
-        if (
-          passed &&
-          endpoint.name === 'GET /todos/{id} (existent)' &&
-          responseBody &&
-          responseBody.id !== 1
-        ) {
-          passed = false
-          result.reason = `Expected id to be 1, but got ${responseBody.id}`
-        }
+          if (endpoint.method === 'POST' && endpoint.requestBody) {
+            ;(options.headers as Record<string, string>)['Content-Type'] =
+              'application/json'
+            options.body = JSON.stringify(endpoint.requestBody)
+          }
 
-        result.passed = passed
-        if (passed) {
-          currentScore++
-        } else if (!result.reason) {
-          result.reason = `Status code mismatch. Expected: ${result.expectedStatus}, Actual: ${result.actualStatus}`
-        }
-      } catch (error: any) {
-        result.passed = false
-        if (error instanceof TypeError && error.message === 'Failed to fetch') {
-          result.reason =
-            'Network error or CORS issue. Check browser console and ensure backend allows requests from this origin.'
-        } else {
-          result.reason = `Request failed: ${error.message}`
+          const response = await fetch(url, options)
+          result.actualStatus = response.status
+          result.actualContentType =
+            response.headers.get('Content-Type') || undefined
+
+          let responseBody
+          const contentType = response.headers.get('Content-Type')
+          if (contentType && contentType.includes('application/json')) {
+            responseBody = await response.json()
+            result.responseBody = responseBody
+          } else {
+            responseBody = await response.text() // Get text for non-JSON for logging
+            result.responseBody = responseBody
+          }
+
+          let passed = result.actualStatus === result.expectedStatus
+          if (passed && endpoint.expectedContentType) {
+            if (
+              !result.actualContentType ||
+              !result.actualContentType.includes(endpoint.expectedContentType)
+            ) {
+              passed = false
+              result.reason = `Content-Type mismatch. Expected: ${endpoint.expectedContentType}, Actual: ${result.actualContentType}`
+            }
+          }
+          // For non-sequential tests, validateBody takes only responseBody
+          if (passed && endpoint.validateBody) {
+            // Pass endpoint.requestBody only if validateBody expects it (e.g. for POST validation)
+            const isValid =
+              endpoint.method === 'POST' &&
+              endpoint.name !== 'POST /todos, then GET and Validate'
+                ? endpoint.validateBody(responseBody, endpoint.requestBody)
+                : endpoint.validateBody(responseBody)
+            if (!isValid) {
+              passed = false
+              result.reason = 'Response body validation failed.'
+            }
+          }
+
+          // Specific validation for GET /todos/1 to check ID, if not already covered by a more generic validateBody
+          if (
+            passed &&
+            endpoint.name === 'GET /todos/{id} (existent)' &&
+            responseBody &&
+            typeof responseBody.id === 'number' && // ensure id exists before checking
+            responseBody.id !== 1 // Assuming path is /todos/1
+          ) {
+            // This check might be redundant if validateBody is comprehensive
+            // For example, if path was dynamic like /todos/${someId}, this check would be: responseBody.id !== someId
+            // Given path is hardcoded to /todos/1, we check against 1.
+            if (endpoint.path === '/todos/1' && responseBody.id !== 1) {
+              passed = false
+              result.reason = `Expected id to be 1 for ${endpoint.path}, but got ${responseBody.id}`
+            }
+          }
+
+          result.passed = passed
+          if (passed) {
+            currentScore++
+          } else if (!result.reason) {
+            if (result.actualStatus !== result.expectedStatus) {
+              result.reason = `Status code mismatch. Expected: ${result.expectedStatus}, Actual: ${result.actualStatus}`
+            } else {
+              result.reason =
+                'Test failed for an unknown reason after passing status and content type checks.'
+            }
+          }
+        } catch (error: any) {
+          result.passed = false
+          if (
+            error instanceof TypeError &&
+            error.message === 'Failed to fetch'
+          ) {
+            result.reason =
+              'Network error or CORS issue. Check browser console and ensure backend allows requests from this origin.'
+          } else {
+            result.reason = `Request failed: ${error.message}`
+          }
         }
       }
       setResults((prevResults) => [...prevResults, result])

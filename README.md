@@ -83,6 +83,8 @@ yarn dev
 3. 在可展开的卡片中查看结果
 4. 点击卡片查看有关测试结果的详细信息
 
+有关更详细的中文使用说明，请参阅 [中文用户手册 (USER_MANUAL_CN.md)](./USER_MANUAL_CN.md)。
+
 ## 🛠️ 使用的技术
 
 - 使用 TypeScript 的 React 18 ⚛️
